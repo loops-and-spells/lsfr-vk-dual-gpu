@@ -5,6 +5,7 @@
 #include "mini/commandpool.hpp"
 #include "mini/image.hpp"
 #include "mini/semaphore.hpp"
+#include "mini/staging.hpp"
 
 #include <vulkan/vulkan_core.h>
 
@@ -53,6 +54,11 @@ public:
     LsContext& operator=(LsContext&&) = default;
     ~LsContext() = default;
 private:
+    VkResult presentFdMode(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
+        const std::vector<VkSemaphore>& gameRenderSemaphores, uint32_t presentIdx);
+    VkResult presentStagingMode(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
+        const std::vector<VkSemaphore>& gameRenderSemaphores, uint32_t presentIdx);
+
     VkSwapchainKHR swapchain;
     std::vector<VkImage> swapchainImages;
     VkExtent2D extent;
@@ -60,6 +66,14 @@ private:
     std::shared_ptr<int32_t> lsfgCtxId; // lsfg context id
     Mini::Image frame_0, frame_1; // frames shared with lsfg. write to frame_0 when fc % 2 == 0
     std::vector<Mini::Image> out_n; // output images shared with lsfg, indexed by framegen id
+
+    // Staging mode support for cross-device operation
+    bool stagingMode{false};
+    Mini::StagingBuffer inStaging_0, inStaging_1; // layer-side staging for input images
+    std::vector<Mini::StagingBuffer> outStagingN; // layer-side staging for output images
+    void* lsfgInPtr0{nullptr}; // LSFG-side staging pointers
+    void* lsfgInPtr1{nullptr};
+    std::vector<void*> lsfgOutPtrs;
 
     Mini::CommandPool cmdPool;
     uint64_t frameIdx{0};

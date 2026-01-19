@@ -51,9 +51,18 @@ namespace {
     PFN_vkGetSemaphoreFdKHR next_vkGetSemaphoreFdKHR{};
     PFN_vkGetDeviceQueue next_vkGetDeviceQueue{};
     PFN_vkQueueSubmit next_vkQueueSubmit{};
+    PFN_vkQueueWaitIdle next_vkQueueWaitIdle{};
     PFN_vkCmdPipelineBarrier next_vkCmdPipelineBarrier{};
     PFN_vkCmdBlitImage next_vkCmdBlitImage{};
     PFN_vkAcquireNextImageKHR next_vkAcquireNextImageKHR{};
+    PFN_vkCreateBuffer next_vkCreateBuffer{};
+    PFN_vkDestroyBuffer next_vkDestroyBuffer{};
+    PFN_vkGetBufferMemoryRequirements next_vkGetBufferMemoryRequirements{};
+    PFN_vkBindBufferMemory next_vkBindBufferMemory{};
+    PFN_vkMapMemory next_vkMapMemory{};
+    PFN_vkUnmapMemory next_vkUnmapMemory{};
+    PFN_vkCmdCopyImageToBuffer next_vkCmdCopyImageToBuffer{};
+    PFN_vkCmdCopyBufferToImage next_vkCmdCopyBufferToImage{};
 
     template<typename T>
     bool initInstanceFunc(VkInstance instance, const char* name, T* func) {
@@ -182,7 +191,8 @@ namespace {
             next_vSetDeviceLoaderData = layerDesc2->u.pfnSetDeviceLoaderData;
 
             // NOLINTEND | skip initialization if the layer is disabled
-            if (!Config::activeConf.enable)
+            // Also check for DISABLE_LSFG env var (set by LSFG backend when creating its own device)
+            if (!Config::activeConf.enable || std::getenv("DISABLE_LSFG"))
                 return next_vkCreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
 
             // create device
@@ -221,9 +231,18 @@ namespace {
             success &= initDeviceFunc(*pDevice, "vkGetSemaphoreFdKHR", &next_vkGetSemaphoreFdKHR);
             success &= initDeviceFunc(*pDevice, "vkGetDeviceQueue", &next_vkGetDeviceQueue);
             success &= initDeviceFunc(*pDevice, "vkQueueSubmit", &next_vkQueueSubmit);
+            success &= initDeviceFunc(*pDevice, "vkQueueWaitIdle", &next_vkQueueWaitIdle);
             success &= initDeviceFunc(*pDevice, "vkCmdPipelineBarrier", &next_vkCmdPipelineBarrier);
             success &= initDeviceFunc(*pDevice, "vkCmdBlitImage", &next_vkCmdBlitImage);
             success &= initDeviceFunc(*pDevice, "vkAcquireNextImageKHR", &next_vkAcquireNextImageKHR);
+            success &= initDeviceFunc(*pDevice, "vkCreateBuffer", &next_vkCreateBuffer);
+            success &= initDeviceFunc(*pDevice, "vkDestroyBuffer", &next_vkDestroyBuffer);
+            success &= initDeviceFunc(*pDevice, "vkGetBufferMemoryRequirements", &next_vkGetBufferMemoryRequirements);
+            success &= initDeviceFunc(*pDevice, "vkBindBufferMemory", &next_vkBindBufferMemory);
+            success &= initDeviceFunc(*pDevice, "vkMapMemory", &next_vkMapMemory);
+            success &= initDeviceFunc(*pDevice, "vkUnmapMemory", &next_vkUnmapMemory);
+            success &= initDeviceFunc(*pDevice, "vkCmdCopyImageToBuffer", &next_vkCmdCopyImageToBuffer);
+            success &= initDeviceFunc(*pDevice, "vkCmdCopyBufferToImage", &next_vkCmdCopyBufferToImage);
             if (!success)
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "Failed to get device function pointers");
@@ -494,6 +513,9 @@ namespace Layer {
             VkFence fence) {
         return next_vkQueueSubmit(queue, submitCount, pSubmits, fence);
     }
+    VkResult ovkQueueWaitIdle(VkQueue queue) {
+        return next_vkQueueWaitIdle(queue);
+    }
 
     void ovkCmdPipelineBarrier(
             VkCommandBuffer commandBuffer,
@@ -531,5 +553,67 @@ namespace Layer {
             VkFence fence,
             uint32_t* pImageIndex) {
         return next_vkAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
+    }
+
+    VkResult ovkCreateBuffer(
+            VkDevice device,
+            const VkBufferCreateInfo* pCreateInfo,
+            const VkAllocationCallbacks* pAllocator,
+            VkBuffer* pBuffer) {
+        return next_vkCreateBuffer(device, pCreateInfo, pAllocator, pBuffer);
+    }
+    void ovkDestroyBuffer(
+            VkDevice device,
+            VkBuffer buffer,
+            const VkAllocationCallbacks* pAllocator) {
+        next_vkDestroyBuffer(device, buffer, pAllocator);
+    }
+
+    void ovkGetBufferMemoryRequirements(
+            VkDevice device,
+            VkBuffer buffer,
+            VkMemoryRequirements* pMemoryRequirements) {
+        next_vkGetBufferMemoryRequirements(device, buffer, pMemoryRequirements);
+    }
+    VkResult ovkBindBufferMemory(
+            VkDevice device,
+            VkBuffer buffer,
+            VkDeviceMemory memory,
+            VkDeviceSize memoryOffset) {
+        return next_vkBindBufferMemory(device, buffer, memory, memoryOffset);
+    }
+
+    VkResult ovkMapMemory(
+            VkDevice device,
+            VkDeviceMemory memory,
+            VkDeviceSize offset,
+            VkDeviceSize size,
+            VkMemoryMapFlags flags,
+            void** ppData) {
+        return next_vkMapMemory(device, memory, offset, size, flags, ppData);
+    }
+    void ovkUnmapMemory(
+            VkDevice device,
+            VkDeviceMemory memory) {
+        next_vkUnmapMemory(device, memory);
+    }
+
+    void ovkCmdCopyImageToBuffer(
+            VkCommandBuffer commandBuffer,
+            VkImage srcImage,
+            VkImageLayout srcImageLayout,
+            VkBuffer dstBuffer,
+            uint32_t regionCount,
+            const VkBufferImageCopy* pRegions) {
+        next_vkCmdCopyImageToBuffer(commandBuffer, srcImage, srcImageLayout, dstBuffer, regionCount, pRegions);
+    }
+    void ovkCmdCopyBufferToImage(
+            VkCommandBuffer commandBuffer,
+            VkBuffer srcBuffer,
+            VkImage dstImage,
+            VkImageLayout dstImageLayout,
+            uint32_t regionCount,
+            const VkBufferImageCopy* pRegions) {
+        next_vkCmdCopyBufferToImage(commandBuffer, srcBuffer, dstImage, dstImageLayout, regionCount, pRegions);
     }
 }

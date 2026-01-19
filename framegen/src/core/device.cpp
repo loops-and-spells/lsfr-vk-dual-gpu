@@ -5,6 +5,7 @@
 #include "core/instance.hpp"
 #include "common/exception.hpp"
 
+#include <iostream>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@ using namespace LSFG::Core;
 const std::vector<const char*> requiredExtensions = {
     "VK_KHR_external_memory_fd",
     "VK_KHR_external_semaphore_fd",
+    "VK_EXT_external_memory_dma_buf",
     "VK_EXT_robustness2",
 };
 
@@ -30,22 +32,59 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
     if (res != VK_SUCCESS)
         throw LSFG::vulkan_error(res, "Failed to get physical devices");
 
-    // get device by uuid
+    // deviceUUID format: either vendorID:deviceID (legacy) or PCI-encoded
+    // High 16 bits: if 0xFFFF, it's PCI-encoded: bus in bits 8-15, device in bits 0-7
+    // Otherwise it's vendorID << 32 | deviceID
+    const bool isPciEncoded = ((deviceUUID >> 48) & 0xFFFF) == 0xFFFF;
+    uint32_t targetPciBus = 0, targetPciDevice = 0;
+    if (isPciEncoded) {
+        targetPciBus = (deviceUUID >> 8) & 0xFF;
+        targetPciDevice = deviceUUID & 0xFF;
+        std::cerr << "lsfg-framegen: PCI-encoded device selection - looking for bus="
+                  << targetPciBus << " device=" << targetPciDevice << '\n';
+    } else {
+        std::cerr << "lsfg-framegen: Legacy device selection - UUID=0x"
+                  << std::hex << deviceUUID << std::dec << '\n';
+    }
+
+    // get device by uuid or PCI bus
     std::optional<VkPhysicalDevice> physicalDevice;
     for (const auto& device : devices) {
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(device, &properties);
 
-        const uint64_t uuid =
-            static_cast<uint64_t>(properties.vendorID) << 32 | properties.deviceID;
-        if (deviceUUID == uuid || deviceUUID == 0x1463ABAC) {
-            physicalDevice = device;
-            break;
+        if (isPciEncoded) {
+            // Match by PCI bus info
+            VkPhysicalDevicePCIBusInfoPropertiesEXT pciInfo{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT
+            };
+            VkPhysicalDeviceProperties2 props2{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                .pNext = &pciInfo
+            };
+            vkGetPhysicalDeviceProperties2(device, &props2);
+
+            std::cerr << "lsfg-framegen: Checking device " << props2.properties.deviceName
+                      << " at PCI bus=" << pciInfo.pciBus << " device=" << pciInfo.pciDevice << '\n';
+
+            if (pciInfo.pciBus == targetPciBus && pciInfo.pciDevice == targetPciDevice) {
+                std::cerr << "lsfg-framegen: MATCHED! Using " << props2.properties.deviceName << '\n';
+                physicalDevice = device;
+                break;
+            }
+        } else {
+            // Legacy: match by vendorID:deviceID
+            const uint64_t uuid =
+                static_cast<uint64_t>(properties.vendorID) << 32 | properties.deviceID;
+            if (deviceUUID == uuid || deviceUUID == 0x1463ABAC) {
+                physicalDevice = device;
+                break;
+            }
         }
     }
     if (!physicalDevice)
         throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
-            "Could not find physical device with UUID");
+            "Could not find physical device with UUID/PCI");
 
     // find queue family indices
     uint32_t familyCount{};

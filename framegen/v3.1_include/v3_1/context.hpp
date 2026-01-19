@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/image.hpp"
+#include "core/staging.hpp"
 #include "core/semaphore.hpp"
 #include "core/fence.hpp"
 #include "core/commandbuffer.hpp"
@@ -25,7 +26,7 @@ namespace LSFG_3_1 {
     class Context {
     public:
         ///
-        /// Create a context
+        /// Create a context with FD-imported images.
         ///
         /// @param vk The Vulkan instance to use.
         /// @param in0 File descriptor for the first input image.
@@ -41,7 +42,18 @@ namespace LSFG_3_1 {
             VkExtent2D extent, VkFormat format);
 
         ///
-        /// Present on the context.
+        /// Create a context with staging buffers (for cross-device operation).
+        ///
+        /// @param vk The Vulkan instance to use.
+        /// @param extent The size of the images.
+        /// @param format The format of the images.
+        ///
+        /// @throws LSFG::vulkan_error if the context fails to initialize.
+        ///
+        Context(Vulkan& vk, VkExtent2D extent, VkFormat format);
+
+        ///
+        /// Present on the context (FD mode).
         ///
         /// @param inSem Semaphore to wait on before starting the generation.
         /// @param outSem Semaphores to signal after each generation is done.
@@ -51,6 +63,18 @@ namespace LSFG_3_1 {
         void present(Vulkan& vk,
             int inSem, const std::vector<int>& outSem);
 
+        ///
+        /// Present on the context (staging mode).
+        /// Before calling, write source frames to staging pointers.
+        /// After calling, generated frames are in output staging pointers.
+        ///
+        /// @throws LSFG::vulkan_error if the context fails to present.
+        ///
+        void presentStaging(Vulkan& vk);
+
+        /// Get staging buffer pointers (only valid in staging mode)
+        void getStagingPointers(void** in0, void** in1, std::vector<void*>& outPtrs) const;
+
         // Trivially copyable, moveable and destructible
         Context(const Context&) = default;
         Context& operator=(const Context&) = default;
@@ -58,8 +82,15 @@ namespace LSFG_3_1 {
         Context& operator=(Context&&) = default;
         ~Context() = default;
     private:
+        void initShaders(Vulkan& vk, const std::vector<int>& outN, VkFormat format, bool stagingMode = false);
+
         Core::Image inImg_0, inImg_1; // inImg_0 is next when fc % 2 == 0
         uint64_t frameIdx{0};
+        bool stagingMode{false};
+
+        // Staging buffers (only used in staging mode)
+        Core::StagingBuffer inStaging_0, inStaging_1;
+        std::vector<Core::StagingBuffer> outStagingN;
 
         struct RenderData {
             Core::Semaphore inSemaphore; // signaled when input is ready
@@ -69,6 +100,11 @@ namespace LSFG_3_1 {
 
             Core::CommandBuffer cmdBuffer1;
             std::vector<Core::CommandBuffer> cmdBuffers2; // command buffers for second step
+
+            // Staging mode buffers
+            Core::CommandBuffer stagingInCmd;
+            Core::CommandBuffer stagingOutCmd;
+            Core::Fence stagingFence;
 
             bool shouldWait{false};
         };

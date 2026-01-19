@@ -5,6 +5,7 @@
 #include "core/device.hpp"
 #include "common/exception.hpp"
 
+#include <iostream>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -62,10 +63,15 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
         .allocationSize = memReqs.size,
         .memoryTypeIndex = memType.value()
     };
+    std::cerr << "lsfg-framegen: Allocating " << memReqs.size << " bytes, memType=" << memType.value()
+              << ", device=" << device.handle() << '\n';
     VkDeviceMemory memoryHandle{};
     res = vkAllocateMemory(device.handle(), &allocInfo, nullptr, &memoryHandle);
-    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE) {
+        std::cerr << "lsfg-framegen: vkAllocateMemory failed with error " << res << '\n';
         throw LSFG::vulkan_error(res, "Failed to allocate memory for Vulkan image");
+    }
+    std::cerr << "lsfg-framegen: Memory allocated successfully\n";
 
     res = vkBindImageMemory(device.handle(), imageHandle, memoryHandle, 0);
     if (res != VK_SUCCESS)
@@ -125,7 +131,7 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
     // create image
     const VkExternalMemoryImageCreateInfo externalInfo{
         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
     };
     const VkImageCreateInfo desc{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -148,25 +154,44 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
     if (res != VK_SUCCESS || imageHandle == VK_NULL_HANDLE)
         throw LSFG::vulkan_error(res, "Failed to create Vulkan image");
 
-    // find memory type
+    // find memory type - for DMA_BUF import we need to query compatible types
     VkPhysicalDeviceMemoryProperties memProps;
     vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), &memProps);
 
     VkMemoryRequirements memReqs;
     vkGetImageMemoryRequirements(device.handle(), imageHandle, &memReqs);
 
+    // For DMA_BUF import, query the FD's compatible memory types
+    uint32_t fdMemoryTypeBits = memReqs.memoryTypeBits;
+    if (fd >= 0) {
+        VkMemoryFdPropertiesKHR fdProps{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR
+        };
+        auto fdRes = vkGetMemoryFdPropertiesKHR(device.handle(),
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps);
+        if (fdRes == VK_SUCCESS) {
+            fdMemoryTypeBits = fdProps.memoryTypeBits;
+            std::cerr << "lsfg-framegen: FD " << fd << " compatible memTypes: 0x"
+                      << std::hex << fdMemoryTypeBits << std::dec << '\n';
+        } else {
+            std::cerr << "lsfg-framegen: vkGetMemoryFdPropertiesKHR failed with " << fdRes << '\n';
+        }
+    }
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
     std::optional<uint32_t> memType{};
+    // Intersect image requirements with FD requirements
+    uint32_t combinedBits = memReqs.memoryTypeBits & fdMemoryTypeBits;
     for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-        if ((memReqs.memoryTypeBits & (1 << i)) && // NOLINTBEGIN
+        if ((combinedBits & (1 << i)) && // NOLINTBEGIN
             (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
             memType.emplace(i);
             break;
         } // NOLINTEND
     }
     if (!memType.has_value())
-        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Unable to find memory type for image");
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Unable to find memory type for image import");
 #pragma clang diagnostic pop
 
     // ~~allocate~~ and bind memory
@@ -177,7 +202,7 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
     const VkImportMemoryFdInfoKHR importInfo{
         .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
         .pNext = &dedicatedInfo2,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
         .fd = fd // closes the fd
     };
     const VkMemoryAllocateInfo allocInfo{
@@ -186,10 +211,15 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
         .allocationSize = memReqs.size,
         .memoryTypeIndex = memType.value()
     };
+    std::cerr << "lsfg-framegen: Importing FD " << fd << ", size=" << memReqs.size
+              << ", memType=" << memType.value() << '\n';
     VkDeviceMemory memoryHandle{};
     res = vkAllocateMemory(device.handle(), &allocInfo, nullptr, &memoryHandle);
-    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE) {
+        std::cerr << "lsfg-framegen: vkAllocateMemory (import) failed with error " << res << '\n';
         throw LSFG::vulkan_error(res, "Failed to allocate memory for Vulkan image");
+    }
+    std::cerr << "lsfg-framegen: Import succeeded\n";
 
     res = vkBindImageMemory(device.handle(), imageHandle, memoryHandle, 0);
     if (res != VK_SUCCESS)

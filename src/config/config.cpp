@@ -94,6 +94,15 @@ void Config::updateConfig(const std::string& file) {
             throw std::runtime_error("Game override missing 'exe' field");
 
         const std::string exe = toml::find<std::string>(gameTable, "exe");
+
+        // Parse optional GPU fields
+        std::optional<std::string> gpu;
+        std::optional<std::string> gpu_secondary;
+        if (gameTable.contains("gpu"))
+            gpu = toml::find<std::string>(gameTable, "gpu");
+        if (gameTable.contains("gpu_secondary"))
+            gpu_secondary = toml::find<std::string>(gameTable, "gpu_secondary");
+
         Configuration game{
             .enable = true,
             .dll = global.dll,
@@ -101,6 +110,8 @@ void Config::updateConfig(const std::string& file) {
             .flowScale = toml::find_or(gameTable, "flow_scale", 1.0F),
             .performance = toml::find_or(gameTable, "performance_mode", false),
             .hdr = toml::find_or(gameTable, "hdr_mode", false),
+            .gpu = gpu,
+            .gpu_secondary = gpu_secondary,
             .e_present =   into_present(toml::find_or(gameTable, "experimental_present_mode", "")),
             .config_file = file,
             .timestamp = global.timestamp
@@ -141,6 +152,10 @@ Configuration Config::getConfig(const std::pair<std::string, std::string>& name)
         if (hdr) conf.hdr = std::string(hdr) == "1";
         const char* e_present = std::getenv("LSFG_EXPERIMENTAL_PRESENT_MODE");
         if (e_present) conf.e_present = into_present(std::string(e_present));
+        const char* gpu = std::getenv("LSFG_GPU");
+        if (gpu && *gpu != '\0') conf.gpu = std::string(gpu);
+        const char* gpu_secondary = std::getenv("LSFG_GPU_SECONDARY");
+        if (gpu_secondary && *gpu_secondary != '\0') conf.gpu_secondary = std::string(gpu_secondary);
 
         return conf;
     }

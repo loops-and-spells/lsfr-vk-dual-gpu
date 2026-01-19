@@ -95,3 +95,36 @@ void LSFG_3_1::finalize() {
     device.reset();
     instance.reset();
 }
+
+// ==================== STAGING MODE API ====================
+
+int32_t LSFG_3_1::createContextStaging(VkExtent2D extent, VkFormat format) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    const int32_t id = std::rand();
+    contexts.emplace(id, Context(*device, extent, format));
+    return id;
+}
+
+void LSFG_3_1::getStagingPointers(int32_t id, void** inPtr0, void** inPtr1, std::vector<void*>& outPtrs) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.getStagingPointers(inPtr0, inPtr1, outPtrs);
+}
+
+void LSFG_3_1::presentContextStaging(int32_t id) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.presentStaging(*device);
+}

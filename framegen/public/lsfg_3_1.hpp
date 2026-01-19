@@ -68,4 +68,43 @@ namespace LSFG_3_1 {
     __attribute__((visibility("default")))
     void finalize();
 
+    // ==================== STAGING MODE API ====================
+    // For cross-device operation where FD sharing isn't supported
+
+    ///
+    /// Create a new LSFG context using staging mode (no FD import).
+    /// Input/output is done via CPU memory pointers.
+    ///
+    /// @param extent The size of the images
+    /// @param format The format of the images.
+    /// @return A unique identifier for the created context.
+    ///
+    /// @throws LSFG::vulkan_error if the context cannot be created.
+    ///
+    __attribute__((visibility("default")))
+    int32_t createContextStaging(VkExtent2D extent, VkFormat format);
+
+    ///
+    /// Get the staging buffer pointers for a context.
+    ///
+    /// @param id Unique identifier of the context.
+    /// @param inPtr0 Output: pointer to source image 0 staging buffer
+    /// @param inPtr1 Output: pointer to source image 1 staging buffer
+    /// @param outPtrs Output: pointers to output image staging buffers
+    ///
+    __attribute__((visibility("default")))
+    void getStagingPointers(int32_t id, void** inPtr0, void** inPtr1, std::vector<void*>& outPtrs);
+
+    ///
+    /// Present a context in staging mode.
+    /// Before calling, copy source data to inPtr0/inPtr1 staging buffers.
+    /// After calling, generated frames are in outPtrs staging buffers.
+    ///
+    /// @param id Unique identifier of the context to present.
+    ///
+    /// @throws LSFG::vulkan_error if the context cannot be presented.
+    ///
+    __attribute__((visibility("default")))
+    void presentContextStaging(int32_t id);
+
 }

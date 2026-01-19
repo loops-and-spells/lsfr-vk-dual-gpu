@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include <iostream>
 #include <memory>
 #include <cstdint>
 #include <optional>
@@ -17,7 +18,7 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
     // create image
     const VkExternalMemoryImageCreateInfo externalInfo{
         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
     };
     const VkImageCreateInfo desc{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -69,7 +70,7 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
     const VkExportMemoryAllocateInfo exportInfo{
         .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
         .pNext = &dedicatedInfo,
-        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
     };
     const VkMemoryAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
@@ -77,10 +78,15 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
         .allocationSize = memReqs.size,
         .memoryTypeIndex = memType.value()
     };
+    std::cerr << "lsfg-mini: Allocating exportable " << memReqs.size << " bytes, memType=" << memType.value()
+              << ", extent=" << extent.width << "x" << extent.height << '\n';
     VkDeviceMemory memoryHandle{};
     res = Layer::ovkAllocateMemory(device, &allocInfo, nullptr, &memoryHandle);
-    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE) {
+        std::cerr << "lsfg-mini: vkAllocateMemory failed with error " << res << '\n';
         throw LSFG::vulkan_error(res, "Failed to allocate memory for Vulkan image");
+    }
+    std::cerr << "lsfg-mini: Memory allocated successfully\n";
 
     res = Layer::ovkBindImageMemory(device, imageHandle, memoryHandle, 0);
     if (res != VK_SUCCESS)
@@ -90,7 +96,7 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
     const VkMemoryGetFdInfoKHR fdInfo{
         .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
         .memory = memoryHandle,
-        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
     };
     res = Layer::ovkGetMemoryFdKHR(device, &fdInfo, fd);
     if (res != VK_SUCCESS || *fd < 0)

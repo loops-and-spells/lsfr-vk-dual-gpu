@@ -35,18 +35,22 @@ namespace LSFG_3_1::Shaders {
         /// @param inImg4 Input image 4.
         /// @param inImg5 Input image 5.
         /// @param fds File descriptors for the output images.
+        /// @param stagingMode If true, add TRANSFER_SRC_BIT to output images for staging copies.
         ///
         /// @throws LSFG::vulkan_error if resource creation fails.
         ///
         Generate(Vulkan& vk,
             Core::Image inImg1, Core::Image inImg2,
             Core::Image inImg3, Core::Image inImg4, Core::Image inImg5,
-            const std::vector<int>& fds, VkFormat format);
+            const std::vector<int>& fds, VkFormat format, bool stagingMode = false);
 
         ///
         /// Dispatch the shaderchain.
         ///
         void Dispatch(const Core::CommandBuffer& buf, uint64_t frameCount, uint64_t pass_idx);
+
+        /// Get output images (for staging mode)
+        [[nodiscard]] const std::vector<Core::Image>& getOutImages() const { return outImgs; }
 
         /// Trivially copyable, moveable and destructible
         Generate(const Generate&) noexcept = default;

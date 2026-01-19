@@ -3,6 +3,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include <filesystem>
+#include <optional>
 #include <chrono>
 #include <cstddef>
 #include <string>
@@ -24,6 +25,11 @@ namespace Config {
         bool performance{false};
         /// Whether HDR is enabled
         bool hdr{false};
+
+        /// GPU selection (PCI bus:device.function, e.g. "17:0.0")
+        std::optional<std::string> gpu;
+        /// Secondary GPU for frame generation (PCI bus:device.function)
+        std::optional<std::string> gpu_secondary;
 
         /// Experimental flag for overriding the synchronization method.
         VkPresentModeKHR e_present;

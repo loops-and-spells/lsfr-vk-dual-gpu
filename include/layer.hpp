@@ -184,6 +184,9 @@ namespace Layer {
         uint32_t submitCount,
         const VkSubmitInfo* pSubmits,
         VkFence fence);
+    /// Call to the original vkQueueWaitIdle function.
+    VkResult ovkQueueWaitIdle(
+        VkQueue queue);
 
     /// Call to the original vkCmdPipelineBarrier function.
     void ovkCmdPipelineBarrier(
@@ -216,11 +219,65 @@ namespace Layer {
         VkSemaphore semaphore,
         VkFence fence,
         uint32_t* pImageIndex);
+
+    /// Call to the original vkCreateBuffer function.
+    VkResult ovkCreateBuffer(
+        VkDevice device,
+        const VkBufferCreateInfo* pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkBuffer* pBuffer);
+    /// Call to the original vkDestroyBuffer function.
+    void ovkDestroyBuffer(
+        VkDevice device,
+        VkBuffer buffer,
+        const VkAllocationCallbacks* pAllocator);
+
+    /// Call to the original vkGetBufferMemoryRequirements function.
+    void ovkGetBufferMemoryRequirements(
+        VkDevice device,
+        VkBuffer buffer,
+        VkMemoryRequirements* pMemoryRequirements);
+    /// Call to the original vkBindBufferMemory function.
+    VkResult ovkBindBufferMemory(
+        VkDevice device,
+        VkBuffer buffer,
+        VkDeviceMemory memory,
+        VkDeviceSize memoryOffset);
+
+    /// Call to the original vkMapMemory function.
+    VkResult ovkMapMemory(
+        VkDevice device,
+        VkDeviceMemory memory,
+        VkDeviceSize offset,
+        VkDeviceSize size,
+        VkMemoryMapFlags flags,
+        void** ppData);
+    /// Call to the original vkUnmapMemory function.
+    void ovkUnmapMemory(
+        VkDevice device,
+        VkDeviceMemory memory);
+
+    /// Call to the original vkCmdCopyImageToBuffer function.
+    void ovkCmdCopyImageToBuffer(
+        VkCommandBuffer commandBuffer,
+        VkImage srcImage,
+        VkImageLayout srcImageLayout,
+        VkBuffer dstBuffer,
+        uint32_t regionCount,
+        const VkBufferImageCopy* pRegions);
+    /// Call to the original vkCmdCopyBufferToImage function.
+    void ovkCmdCopyBufferToImage(
+        VkCommandBuffer commandBuffer,
+        VkBuffer srcBuffer,
+        VkImage dstImage,
+        VkImageLayout dstImageLayout,
+        uint32_t regionCount,
+        const VkBufferImageCopy* pRegions);
 }
 
 /// Symbol definition for Vulkan instance layer.
-__attribute__((visibility("default")))
-extern "C" PFN_vkVoidFunction layer_vkGetInstanceProcAddr(VkInstance instance, const char* pName);
+extern "C" __attribute__((visibility("default")))
+PFN_vkVoidFunction layer_vkGetInstanceProcAddr(VkInstance instance, const char* pName);
 /// Symbol definition for Vulkan device layer.
-__attribute__((visibility("default")))
-extern "C" PFN_vkVoidFunction layer_vkGetDeviceProcAddr(VkDevice device, const char* pName);
+extern "C" __attribute__((visibility("default")))
+PFN_vkVoidFunction layer_vkGetDeviceProcAddr(VkDevice device, const char* pName);

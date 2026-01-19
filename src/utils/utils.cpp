@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <string.h> // NOLINT
 #include <unistd.h>
+#include <dlfcn.h>
 
 #include <unordered_map>
 #include <algorithm>
@@ -16,11 +17,101 @@
 #include <cstring>
 #include <utility>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <array>
 
 using namespace Utils;
+
+std::optional<uint64_t> Utils::findDeviceByPci(const std::string& pciAddress) {
+    // Parse PCI address format: "bus:device.function" (e.g., "17:0.0")
+    uint32_t targetBus = 0, targetDevice = 0, targetFunction = 0;
+    char colonChar = 0, dotChar = 0;
+    std::istringstream iss(pciAddress);
+    iss >> targetBus >> colonChar >> targetDevice >> dotChar >> targetFunction;
+    if (colonChar != ':' || dotChar != '.') {
+        std::cerr << "lsfg-vk: Invalid PCI address format: " << pciAddress << '\n';
+        return std::nullopt;
+    }
+
+    // Load Vulkan functions dynamically
+    void* vulkanLib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!vulkanLib) {
+        std::cerr << "lsfg-vk: Failed to load libvulkan.so.1\n";
+        return std::nullopt;
+    }
+
+    auto pvkCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
+        dlsym(vulkanLib, "vkCreateInstance"));
+    auto pvkDestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(
+        dlsym(vulkanLib, "vkDestroyInstance"));
+    auto pvkEnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        dlsym(vulkanLib, "vkEnumeratePhysicalDevices"));
+    auto pvkGetPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+        dlsym(vulkanLib, "vkGetPhysicalDeviceProperties2"));
+
+    if (!pvkCreateInstance || !pvkDestroyInstance || !pvkEnumeratePhysicalDevices ||
+        !pvkGetPhysicalDeviceProperties2) {
+        std::cerr << "lsfg-vk: Failed to load Vulkan functions\n";
+        dlclose(vulkanLib);
+        return std::nullopt;
+    }
+
+    // Create temporary Vulkan instance
+    VkApplicationInfo appInfo{
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = "lsfg-vk-pci-query",
+        .apiVersion = VK_API_VERSION_1_3
+    };
+    VkInstanceCreateInfo instanceInfo{
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &appInfo
+    };
+    VkInstance instance = VK_NULL_HANDLE;
+    if (pvkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS) {
+        std::cerr << "lsfg-vk: Failed to create temporary Vulkan instance for PCI query\n";
+        dlclose(vulkanLib);
+        return std::nullopt;
+    }
+
+    // Enumerate physical devices
+    uint32_t deviceCount = 0;
+    pvkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    pvkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    std::optional<uint64_t> result;
+    for (const auto& device : devices) {
+        // Get PCI bus info
+        VkPhysicalDevicePCIBusInfoPropertiesEXT pciInfo{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT
+        };
+        VkPhysicalDeviceProperties2 props2{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &pciInfo
+        };
+        pvkGetPhysicalDeviceProperties2(device, &props2);
+
+        if (pciInfo.pciBus == targetBus &&
+            pciInfo.pciDevice == targetDevice &&
+            pciInfo.pciFunction == targetFunction) {
+            // Found matching device - encode PCI bus info into UUID format
+            // Format: 0xFFFF (marker) in high 16 bits, bus in bits 8-15, device in bits 0-7
+            result = (static_cast<uint64_t>(0xFFFF) << 48) |
+                     (static_cast<uint64_t>(pciInfo.pciBus) << 8) |
+                     static_cast<uint64_t>(pciInfo.pciDevice);
+            std::cerr << "lsfg-vk: Found device at PCI " << pciAddress << ": "
+                      << props2.properties.deviceName
+                      << " (PCI-encoded UUID: 0x" << std::hex << result.value() << std::dec << ")\n";
+            break;
+        }
+    }
+
+    pvkDestroyInstance(instance, nullptr);
+    dlclose(vulkanLib);
+    return result;
+}
 
 std::pair<uint32_t, VkQueue> Utils::findQueue(VkDevice device, VkPhysicalDevice physicalDevice,
         VkDeviceCreateInfo* desc, VkQueueFlags flags) {
@@ -93,11 +184,12 @@ void Utils::copyImage(VkCommandBuffer buf,
         VkImage src, VkImage dst,
         uint32_t width, uint32_t height,
         VkPipelineStageFlags pre, VkPipelineStageFlags post,
-        bool makeSrcPresentable, bool makeDstPresentable) {
+        bool makeSrcPresentable, bool makeDstPresentable,
+        VkImageLayout srcLayout) {
     const VkImageMemoryBarrier srcBarrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .oldLayout = srcLayout,
         .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         .image = src,
         .subresourceRange = {

@@ -22,8 +22,10 @@ namespace {
 
         // read configuration
         const std::string file = Utils::getConfigFile();
+        std::cerr << "lsfg-vk: Reading config from: " << file << '\n';
         try {
             Config::updateConfig(file);
+            std::cerr << "lsfg-vk: Config parsed successfully\n";
         } catch (const std::exception& e) {
             std::cerr << "lsfg-vk: An error occured while trying to parse the configuration, IGNORING:\n";
             std::cerr << "- " << e.what() << '\n';
@@ -45,13 +47,16 @@ namespace {
             return; // default configuration will unload
 
         // print config
-        std::cerr << "lsfg-vk: Loaded configuration for " << name.second << ":\n";
+        std::cerr << "lsfg-vk [DUAL-GPU BUILD]: Loaded configuration for " << name.second << ":\n";
         if (!conf.dll.empty()) std::cerr << "  Using DLL from: " << conf.dll << '\n';
         std::cerr << "  Multiplier: " << conf.multiplier << '\n';
         std::cerr << "  Flow Scale: " << conf.flowScale << '\n';
         std::cerr << "  Performance Mode: " << (conf.performance ? "Enabled" : "Disabled") << '\n';
         std::cerr << "  HDR Mode: " << (conf.hdr ? "Enabled" : "Disabled") << '\n';
         if (conf.e_present != 2) std::cerr << "  ! Present Mode: " << conf.e_present << '\n';
+        if (conf.gpu.has_value()) std::cerr << "  GPU: " << conf.gpu.value() << '\n';
+        if (conf.gpu_secondary.has_value())
+            std::cerr << "  Secondary GPU: " << conf.gpu_secondary.value() << " (dual-GPU mode)\n";
 
         // remove mesa var in favor of config
         unsetenv("MESA_VK_WSI_PRESENT_MODE"); // NOLINT

@@ -4,11 +4,20 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <optional>
 #include <utility>
 #include <string>
 #include <vector>
 
 namespace Utils {
+
+    ///
+    /// Find a device UUID by its PCI bus address.
+    ///
+    /// @param pciAddress The PCI bus address (e.g., "17:0.0" for bus:device.function).
+    /// @return The device UUID, or nullopt if not found.
+    ///
+    std::optional<uint64_t> findDeviceByPci(const std::string& pciAddress);
 
     ///
     /// Find a queue in the physical device that supports the given queue flags.
@@ -62,12 +71,14 @@ namespace Utils {
     /// @param post The pipeline stage to provide after the copy.
     /// @param makeSrcPresentable If true, the source image will be made presentable after the copy.
     /// @param makeDstPresentable If true, the destination image will be made presentable after the copy.
+    /// @param srcLayout The current layout of the source image (default: PRESENT_SRC_KHR).
     ///
     void copyImage(VkCommandBuffer buf,
             VkImage src, VkImage dst,
             uint32_t width, uint32_t height,
             VkPipelineStageFlags pre, VkPipelineStageFlags post,
-            bool makeSrcPresentable, bool makeDstPresentable);
+            bool makeSrcPresentable, bool makeDstPresentable,
+            VkImageLayout srcLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     ///
     /// Log a message at most n times.
