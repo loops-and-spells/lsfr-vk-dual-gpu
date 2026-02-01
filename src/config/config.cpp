@@ -112,6 +112,9 @@ void Config::updateConfig(const std::string& file) {
             .hdr = toml::find_or(gameTable, "hdr_mode", false),
             .gpu = gpu,
             .gpu_secondary = gpu_secondary,
+            .framegen_scale = toml::find_or(gameTable, "framegen_scale", 1.0F),
+            .framegen_upscale = toml::find_or(gameTable, "framegen_upscale", true),
+            .framegen_debug = toml::find_or(gameTable, "framegen_debug", false),
             .e_present =   into_present(toml::find_or(gameTable, "experimental_present_mode", "")),
             .config_file = file,
             .timestamp = global.timestamp
@@ -122,6 +125,8 @@ void Config::updateConfig(const std::string& file) {
             throw std::runtime_error("Multiplier cannot be less than 1");
         if (game.flowScale < 0.25F || game.flowScale > 1.0F)
             throw std::runtime_error("Flow scale must be between 0.25 and 1.0");
+        if (game.framegen_scale < 0.25F || game.framegen_scale > 1.0F)
+            throw std::runtime_error("Framegen scale must be between 0.25 and 1.0");
         games[exe] = std::move(game);
     }
 

@@ -3,6 +3,7 @@
 #include "hooks.hpp"
 #include "mini/commandbuffer.hpp"
 #include "mini/commandpool.hpp"
+#include "mini/fence.hpp"
 #include "mini/image.hpp"
 #include "mini/semaphore.hpp"
 #include "mini/staging.hpp"
@@ -52,7 +53,7 @@ public:
     LsContext& operator=(const LsContext&) = delete;
     LsContext(LsContext&&) = default;
     LsContext& operator=(LsContext&&) = default;
-    ~LsContext() = default;
+    ~LsContext();
 private:
     VkResult presentFdMode(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
         const std::vector<VkSemaphore>& gameRenderSemaphores, uint32_t presentIdx);
@@ -62,6 +63,10 @@ private:
     VkSwapchainKHR swapchain;
     std::vector<VkImage> swapchainImages;
     VkExtent2D extent;
+    VkExtent2D scaledExtent; // scaled resolution for framegen (may equal extent if scale=1.0)
+    float framegenScale{1.0F}; // framegen scale factor
+    bool framegenUpscale{true}; // whether to upscale output back to full resolution
+    bool framegenDebug{false}; // debug mode: add colored border to generated frames
 
     std::shared_ptr<int32_t> lsfgCtxId; // lsfg context id
     Mini::Image frame_0, frame_1; // frames shared with lsfg. write to frame_0 when fc % 2 == 0
@@ -75,8 +80,17 @@ private:
     void* lsfgInPtr1{nullptr};
     std::vector<void*> lsfgOutPtrs;
 
+    // Scaled intermediate images for down/upsampling (only used when scale < 1.0)
+    Mini::Image scaledInput_0, scaledInput_1; // downsampled input images on primary GPU
+    std::vector<Mini::Image> scaledOutputN; // for upsampling output on primary GPU
+
     Mini::CommandPool cmdPool;
     uint64_t frameIdx{0};
+
+    // Async pipeline state for staging mode
+    bool hasPreviousOutput{false};
+    uint32_t prevPresentIdx{0};
+    Mini::Fence inputCopyFence;
 
     struct RenderPassInfo {
         Mini::CommandBuffer preCopyBuf; // copy from swapchain image to frame_0/frame_1

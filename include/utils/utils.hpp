@@ -81,6 +81,25 @@ namespace Utils {
             VkImageLayout srcLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     ///
+    /// Blit (scale) an image from source to destination with different extents.
+    ///
+    /// @param buf The command buffer to record the blit operation into.
+    /// @param src The source image to blit from.
+    /// @param srcExtent The extent of the source image.
+    /// @param srcLayout The current layout of the source image.
+    /// @param dst The destination image to blit to.
+    /// @param dstExtent The extent of the destination image.
+    /// @param dstLayoutBefore The layout of dst before the operation.
+    /// @param dstLayoutAfter The layout to transition dst to after the blit.
+    /// @param filter The filter to use (VK_FILTER_LINEAR or VK_FILTER_NEAREST).
+    ///
+    void blitImage(VkCommandBuffer buf,
+            VkImage src, VkExtent2D srcExtent, VkImageLayout srcLayout,
+            VkImage dst, VkExtent2D dstExtent,
+            VkImageLayout dstLayoutBefore, VkImageLayout dstLayoutAfter,
+            VkFilter filter = VK_FILTER_LINEAR);
+
+    ///
     /// Log a message at most n times.
     ///
     /// @param id The identifier for the log message.

@@ -47,6 +47,10 @@ namespace {
     PFN_vkFreeMemory next_vkFreeMemory{};
     PFN_vkCreateSemaphore  next_vkCreateSemaphore{};
     PFN_vkDestroySemaphore next_vkDestroySemaphore{};
+    PFN_vkCreateFence next_vkCreateFence{};
+    PFN_vkDestroyFence next_vkDestroyFence{};
+    PFN_vkWaitForFences next_vkWaitForFences{};
+    PFN_vkResetFences next_vkResetFences{};
     PFN_vkGetMemoryFdKHR next_vkGetMemoryFdKHR{};
     PFN_vkGetSemaphoreFdKHR next_vkGetSemaphoreFdKHR{};
     PFN_vkGetDeviceQueue next_vkGetDeviceQueue{};
@@ -63,6 +67,7 @@ namespace {
     PFN_vkUnmapMemory next_vkUnmapMemory{};
     PFN_vkCmdCopyImageToBuffer next_vkCmdCopyImageToBuffer{};
     PFN_vkCmdCopyBufferToImage next_vkCmdCopyBufferToImage{};
+    PFN_vkCmdClearColorImage next_vkCmdClearColorImage{};
 
     template<typename T>
     bool initInstanceFunc(VkInstance instance, const char* name, T* func) {
@@ -228,6 +233,10 @@ namespace {
             success &= initDeviceFunc(*pDevice, "vkFreeMemory", &next_vkFreeMemory);
             success &= initDeviceFunc(*pDevice, "vkCreateSemaphore", &next_vkCreateSemaphore);
             success &= initDeviceFunc(*pDevice, "vkDestroySemaphore", &next_vkDestroySemaphore);
+            success &= initDeviceFunc(*pDevice, "vkCreateFence", &next_vkCreateFence);
+            success &= initDeviceFunc(*pDevice, "vkDestroyFence", &next_vkDestroyFence);
+            success &= initDeviceFunc(*pDevice, "vkWaitForFences", &next_vkWaitForFences);
+            success &= initDeviceFunc(*pDevice, "vkResetFences", &next_vkResetFences);
             success &= initDeviceFunc(*pDevice, "vkGetSemaphoreFdKHR", &next_vkGetSemaphoreFdKHR);
             success &= initDeviceFunc(*pDevice, "vkGetDeviceQueue", &next_vkGetDeviceQueue);
             success &= initDeviceFunc(*pDevice, "vkQueueSubmit", &next_vkQueueSubmit);
@@ -243,6 +252,7 @@ namespace {
             success &= initDeviceFunc(*pDevice, "vkUnmapMemory", &next_vkUnmapMemory);
             success &= initDeviceFunc(*pDevice, "vkCmdCopyImageToBuffer", &next_vkCmdCopyImageToBuffer);
             success &= initDeviceFunc(*pDevice, "vkCmdCopyBufferToImage", &next_vkCmdCopyBufferToImage);
+            success &= initDeviceFunc(*pDevice, "vkCmdClearColorImage", &next_vkCmdClearColorImage);
             if (!success)
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "Failed to get device function pointers");
@@ -486,6 +496,34 @@ namespace Layer {
         next_vkDestroySemaphore(device, semaphore, pAllocator);
     }
 
+    VkResult ovkCreateFence(
+            VkDevice device,
+            const VkFenceCreateInfo* pCreateInfo,
+            const VkAllocationCallbacks* pAllocator,
+            VkFence* pFence) {
+        return next_vkCreateFence(device, pCreateInfo, pAllocator, pFence);
+    }
+    void ovkDestroyFence(
+            VkDevice device,
+            VkFence fence,
+            const VkAllocationCallbacks* pAllocator) {
+        next_vkDestroyFence(device, fence, pAllocator);
+    }
+    VkResult ovkWaitForFences(
+            VkDevice device,
+            uint32_t fenceCount,
+            const VkFence* pFences,
+            VkBool32 waitAll,
+            uint64_t timeout) {
+        return next_vkWaitForFences(device, fenceCount, pFences, waitAll, timeout);
+    }
+    VkResult ovkResetFences(
+            VkDevice device,
+            uint32_t fenceCount,
+            const VkFence* pFences) {
+        return next_vkResetFences(device, fenceCount, pFences);
+    }
+
     VkResult ovkGetMemoryFdKHR(
             VkDevice device,
             const VkMemoryGetFdInfoKHR* pGetFdInfo,
@@ -615,5 +653,15 @@ namespace Layer {
             uint32_t regionCount,
             const VkBufferImageCopy* pRegions) {
         next_vkCmdCopyBufferToImage(commandBuffer, srcBuffer, dstImage, dstImageLayout, regionCount, pRegions);
+    }
+
+    void ovkCmdClearColorImage(
+            VkCommandBuffer commandBuffer,
+            VkImage image,
+            VkImageLayout imageLayout,
+            const VkClearColorValue* pColor,
+            uint32_t rangeCount,
+            const VkImageSubresourceRange* pRanges) {
+        next_vkCmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
     }
 }

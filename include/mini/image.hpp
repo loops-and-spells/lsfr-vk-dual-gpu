@@ -31,6 +31,21 @@ namespace Mini {
         Image(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, VkFormat format,
             VkImageUsageFlags usage, VkImageAspectFlags aspectFlags, int* fd);
 
+        ///
+        /// Create a local-only image (no FD export)
+        ///
+        /// @param device Vulkan device
+        /// @param physicalDevice Vulkan physical device
+        /// @param extent Extent of the image in pixels.
+        /// @param format Vulkan format of the image
+        /// @param usage Usage flags for the image
+        /// @param aspectFlags Aspect flags for the image view
+        ///
+        /// @throws LSFG::vulkan_error if object creation fails.
+        ///
+        Image(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, VkFormat format,
+            VkImageUsageFlags usage, VkImageAspectFlags aspectFlags);
+
         /// Get the Vulkan handle.
         [[nodiscard]] auto handle() const { return *this->image; }
         /// Get the Vulkan device memory handle.

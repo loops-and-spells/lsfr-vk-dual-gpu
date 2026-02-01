@@ -161,6 +161,30 @@ namespace Layer {
         VkSemaphore semaphore,
         const VkAllocationCallbacks* pAllocator);
 
+    /// Call to the original vkCreateFence function.
+    VkResult ovkCreateFence(
+        VkDevice device,
+        const VkFenceCreateInfo* pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkFence* pFence);
+    /// Call to the original vkDestroyFence function.
+    void ovkDestroyFence(
+        VkDevice device,
+        VkFence fence,
+        const VkAllocationCallbacks* pAllocator);
+    /// Call to the original vkWaitForFences function.
+    VkResult ovkWaitForFences(
+        VkDevice device,
+        uint32_t fenceCount,
+        const VkFence* pFences,
+        VkBool32 waitAll,
+        uint64_t timeout);
+    /// Call to the original vkResetFences function.
+    VkResult ovkResetFences(
+        VkDevice device,
+        uint32_t fenceCount,
+        const VkFence* pFences);
+
     /// Call to the original vkGetMemoryFdKHR function.
     VkResult ovkGetMemoryFdKHR(
         VkDevice device,
@@ -273,6 +297,14 @@ namespace Layer {
         VkImageLayout dstImageLayout,
         uint32_t regionCount,
         const VkBufferImageCopy* pRegions);
+    /// Call to the original vkCmdClearColorImage function.
+    void ovkCmdClearColorImage(
+        VkCommandBuffer commandBuffer,
+        VkImage image,
+        VkImageLayout imageLayout,
+        const VkClearColorValue* pColor,
+        uint32_t rangeCount,
+        const VkImageSubresourceRange* pRanges);
 }
 
 /// Symbol definition for Vulkan instance layer.

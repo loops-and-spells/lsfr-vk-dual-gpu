@@ -67,6 +67,12 @@ void CommandBuffer::end() {
 void CommandBuffer::submit(VkQueue queue,
         const std::vector<VkSemaphore>& waitSemaphores,
         const std::vector<VkSemaphore>& signalSemaphores) {
+    submit(queue, VK_NULL_HANDLE, waitSemaphores, signalSemaphores);
+}
+
+void CommandBuffer::submit(VkQueue queue, VkFence fence,
+        const std::vector<VkSemaphore>& waitSemaphores,
+        const std::vector<VkSemaphore>& signalSemaphores) {
     if (*this->state != CommandBufferState::Full)
         throw std::logic_error("Command buffer is not in Full state");
 
@@ -83,7 +89,7 @@ void CommandBuffer::submit(VkQueue queue,
         .signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size()),
         .pSignalSemaphores = signalSemaphores.data()
     };
-    auto res = Layer::ovkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+    auto res = Layer::ovkQueueSubmit(queue, 1, &submitInfo, fence);
     if (res != VK_SUCCESS)
         throw LSFG::vulkan_error(res, "Unable to submit command buffer");
 

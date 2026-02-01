@@ -63,15 +63,10 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
         .allocationSize = memReqs.size,
         .memoryTypeIndex = memType.value()
     };
-    std::cerr << "lsfg-framegen: Allocating " << memReqs.size << " bytes, memType=" << memType.value()
-              << ", device=" << device.handle() << '\n';
     VkDeviceMemory memoryHandle{};
     res = vkAllocateMemory(device.handle(), &allocInfo, nullptr, &memoryHandle);
-    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE) {
-        std::cerr << "lsfg-framegen: vkAllocateMemory failed with error " << res << '\n';
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
         throw LSFG::vulkan_error(res, "Failed to allocate memory for Vulkan image");
-    }
-    std::cerr << "lsfg-framegen: Memory allocated successfully\n";
 
     res = vkBindImageMemory(device.handle(), imageHandle, memoryHandle, 0);
     if (res != VK_SUCCESS)
@@ -169,13 +164,8 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
         };
         auto fdRes = vkGetMemoryFdPropertiesKHR(device.handle(),
             VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps);
-        if (fdRes == VK_SUCCESS) {
+        if (fdRes == VK_SUCCESS)
             fdMemoryTypeBits = fdProps.memoryTypeBits;
-            std::cerr << "lsfg-framegen: FD " << fd << " compatible memTypes: 0x"
-                      << std::hex << fdMemoryTypeBits << std::dec << '\n';
-        } else {
-            std::cerr << "lsfg-framegen: vkGetMemoryFdPropertiesKHR failed with " << fdRes << '\n';
-        }
     }
 
 #pragma clang diagnostic push
@@ -211,15 +201,10 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
         .allocationSize = memReqs.size,
         .memoryTypeIndex = memType.value()
     };
-    std::cerr << "lsfg-framegen: Importing FD " << fd << ", size=" << memReqs.size
-              << ", memType=" << memType.value() << '\n';
     VkDeviceMemory memoryHandle{};
     res = vkAllocateMemory(device.handle(), &allocInfo, nullptr, &memoryHandle);
-    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE) {
-        std::cerr << "lsfg-framegen: vkAllocateMemory (import) failed with error " << res << '\n';
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
         throw LSFG::vulkan_error(res, "Failed to allocate memory for Vulkan image");
-    }
-    std::cerr << "lsfg-framegen: Import succeeded\n";
 
     res = vkBindImageMemory(device.handle(), imageHandle, memoryHandle, 0);
     if (res != VK_SUCCESS)

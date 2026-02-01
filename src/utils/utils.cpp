@@ -280,6 +280,87 @@ void Utils::copyImage(VkCommandBuffer buf,
     }
 }
 
+void Utils::blitImage(VkCommandBuffer buf,
+        VkImage src, VkExtent2D srcExtent, VkImageLayout srcLayout,
+        VkImage dst, VkExtent2D dstExtent,
+        VkImageLayout dstLayoutBefore, VkImageLayout dstLayoutAfter,
+        VkFilter filter) {
+    // Transition src to transfer src, dst to transfer dst
+    const VkImageMemoryBarrier srcBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = srcLayout,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .image = src,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = 1,
+            .layerCount = 1
+        }
+    };
+    const VkImageMemoryBarrier dstBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = dstLayoutBefore,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .image = dst,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = 1,
+            .layerCount = 1
+        }
+    };
+    const std::vector<VkImageMemoryBarrier> barriers = { srcBarrier, dstBarrier };
+    Layer::ovkCmdPipelineBarrier(buf,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+        0, nullptr, 0, nullptr,
+        static_cast<uint32_t>(barriers.size()), barriers.data());
+
+    // Blit with scaling
+    const VkImageBlit imageBlit{
+        .srcSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .layerCount = 1
+        },
+        .srcOffsets = {
+            { 0, 0, 0 },
+            { static_cast<int32_t>(srcExtent.width), static_cast<int32_t>(srcExtent.height), 1 }
+        },
+        .dstSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .layerCount = 1
+        },
+        .dstOffsets = {
+            { 0, 0, 0 },
+            { static_cast<int32_t>(dstExtent.width), static_cast<int32_t>(dstExtent.height), 1 }
+        }
+    };
+    Layer::ovkCmdBlitImage(buf,
+        src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1, &imageBlit, filter);
+
+    // Transition dst to final layout
+    const VkImageMemoryBarrier finalBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = dstLayoutAfter,
+        .image = dst,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = 1,
+            .layerCount = 1
+        }
+    };
+    Layer::ovkCmdPipelineBarrier(buf,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+        0, nullptr, 0, nullptr,
+        1, &finalBarrier);
+}
+
 namespace {
     auto& logCounts() {
         static std::unordered_map<std::string, size_t> map;

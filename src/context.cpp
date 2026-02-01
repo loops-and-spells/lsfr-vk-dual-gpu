@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <exception>
 #include <iostream>
+#include <fstream>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -121,8 +122,32 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     }
 
     this->stagingMode = needsStaging;
+    this->framegenScale = conf.framegen_scale;
+    this->framegenUpscale = conf.framegen_upscale;
+    this->framegenDebug = conf.framegen_debug;
     std::cerr << "lsfg-vk: Final target device UUID for LSFG: 0x" << std::hex << targetDeviceUUID << std::dec << '\n';
     std::cerr << "lsfg-vk: Staging mode: " << (stagingMode ? "ENABLED" : "disabled") << '\n';
+
+    // Calculate scaled extent for framegen (only applies in staging mode)
+    this->scaledExtent = extent;
+    std::cerr << "lsfg-vk: DEBUG: stagingMode=" << stagingMode << ", framegen_scale=" << conf.framegen_scale
+              << ", framegen_debug=" << conf.framegen_debug << ", condition=" << (stagingMode && conf.framegen_scale < 1.0F) << '\n';
+    // Also write to file for easier debugging
+    {
+        std::ofstream logfile("/tmp/lsfg-vk-debug.log", std::ios::app);
+        logfile << "DEBUG: stagingMode=" << stagingMode << ", framegen_scale=" << conf.framegen_scale
+                << ", framegen_debug=" << conf.framegen_debug << ", framegen_upscale=" << conf.framegen_upscale
+                << ", condition=" << (stagingMode && conf.framegen_scale < 1.0F) << '\n';
+    }
+    if (stagingMode && conf.framegen_scale < 1.0F) {
+        this->scaledExtent.width = static_cast<uint32_t>(extent.width * conf.framegen_scale);
+        this->scaledExtent.height = static_cast<uint32_t>(extent.height * conf.framegen_scale);
+        // Ensure dimensions are at least 64 and divisible by 2
+        this->scaledExtent.width = std::max(64U, (this->scaledExtent.width / 2) * 2);
+        this->scaledExtent.height = std::max(64U, (this->scaledExtent.height / 2) * 2);
+        std::cerr << "lsfg-vk: Scaled framegen resolution: " << scaledExtent.width << "x" << scaledExtent.height
+                  << " (scale=" << conf.framegen_scale << ")\n";
+    }
 
     // Finalize any existing LSFG instance first (singleton may have been initialized with wrong device)
     auto* lsfgFinalize = LSFG_3_1::finalize;
@@ -142,20 +167,32 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     );
 
     if (stagingMode) {
-        // Create staging buffers on primary GPU (layer side)
-        this->inStaging_0 = Mini::StagingBuffer(info.device, info.physicalDevice, extent, format);
-        this->inStaging_1 = Mini::StagingBuffer(info.device, info.physicalDevice, extent, format);
+        // Create staging buffers at SCALED resolution (smaller = faster PCIe transfer)
+        this->inStaging_0 = Mini::StagingBuffer(info.device, info.physicalDevice, scaledExtent, format);
+        this->inStaging_1 = Mini::StagingBuffer(info.device, info.physicalDevice, scaledExtent, format);
         for (size_t i = 0; i < (conf.multiplier - 1); ++i)
-            this->outStagingN.emplace_back(info.device, info.physicalDevice, extent, format);
+            this->outStagingN.emplace_back(info.device, info.physicalDevice, scaledExtent, format);
 
-        // Create context in staging mode
+        // Create scaled intermediate images on primary GPU (for down/upsampling)
+        if (conf.framegen_scale < 1.0F) {
+            this->scaledInput_0 = Mini::Image(info.device, info.physicalDevice, scaledExtent, format,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            this->scaledInput_1 = Mini::Image(info.device, info.physicalDevice, scaledExtent, format,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            for (size_t i = 0; i < (conf.multiplier - 1); ++i)
+                this->scaledOutputN.emplace_back(info.device, info.physicalDevice, scaledExtent, format,
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            std::cerr << "lsfg-vk: Created " << (2 + scaledOutputN.size()) << " scaled intermediate images\n";
+        }
+
+        // Create context in staging mode at SCALED resolution
         auto* lsfgCreateContextStaging = LSFG_3_1::createContextStaging;
         auto* lsfgGetStagingPointers = LSFG_3_1::getStagingPointers;
         // Note: LSFG_3_1P doesn't have staging mode yet, fall back to LSFG_3_1
         // if (conf.performance) { ... }
 
         this->lsfgCtxId = std::shared_ptr<int32_t>(
-            new int32_t(lsfgCreateContextStaging(extent, format)),
+            new int32_t(lsfgCreateContextStaging(scaledExtent, format)),
             [lsfgDeleteContext = lsfgDeleteContext](const int32_t* id) {
                 lsfgDeleteContext(*id);
             }
@@ -307,99 +344,133 @@ VkResult LsContext::presentFdMode(const Hooks::DeviceInfo& info, const void* pNe
     return res;
 }
 
+LsContext::~LsContext() {
+    if (this->stagingMode && this->hasPreviousOutput) {
+        try {
+            LSFG_3_1::waitStagingOutput(*this->lsfgCtxId);
+        } catch (...) {}
+    }
+}
+
 VkResult LsContext::presentStagingMode(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
         const std::vector<VkSemaphore>& gameRenderSemaphores, uint32_t presentIdx) {
-    static auto lastFpsTime = std::chrono::steady_clock::now();
-    static uint64_t fpsFrameCount = 0;
-    static double totalWait1 = 0, totalMemcpy1 = 0, totalLsfg = 0, totalMemcpy2 = 0, totalPresent = 0;
-    fpsFrameCount++;
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFpsTime).count();
-    if (elapsed >= 2000) {
-        double fps = fpsFrameCount * 1000.0 / elapsed;
-        std::cerr << "lsfg-vk [STAGING]: " << fps << " FPS | wait1=" << (totalWait1/fpsFrameCount)
-                  << "ms memcpy1=" << (totalMemcpy1/fpsFrameCount) << "ms lsfg=" << (totalLsfg/fpsFrameCount)
-                  << "ms memcpy2=" << (totalMemcpy2/fpsFrameCount) << "ms present=" << (totalPresent/fpsFrameCount) << "ms\n";
-        fpsFrameCount = 0;
-        totalWait1 = totalMemcpy1 = totalLsfg = totalMemcpy2 = totalPresent = 0;
-        lastFpsTime = now;
-    }
-    auto t0 = std::chrono::steady_clock::now();
-
     const auto& conf = Config::activeConf;
     auto& pass = this->passInfos.at(this->frameIdx % 8);
 
-    // 1. copy swapchain image to frame_0/frame_1, then to staging buffer (on primary GPU)
+    // ---- Step 1: Submit swapchain → staging copy (non-blocking GPU submit) ----
     pass.preCopySemaphores.at(0) = Mini::Semaphore(info.device);
     pass.preCopySemaphores.at(1) = Mini::Semaphore(info.device);
     pass.preCopyBuf = Mini::CommandBuffer(info.device, this->cmdPool);
     pass.preCopyBuf.begin();
 
-    Utils::copyImage(pass.preCopyBuf.handle(),
-        this->swapchainImages.at(presentIdx),
-        this->frameIdx % 2 == 0 ? this->frame_0.handle() : this->frame_1.handle(),
-        this->extent.width, this->extent.height,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        true, false);
-
-    // Copy to staging buffer for cross-device transfer
-    // After Utils::copyImage, the dest image is in TRANSFER_DST_OPTIMAL layout
     auto& currentStaging = this->frameIdx % 2 == 0 ? this->inStaging_0 : this->inStaging_1;
-    currentStaging.copyFromImage(pass.preCopyBuf.handle(),
-        this->frameIdx % 2 == 0 ? this->frame_0.handle() : this->frame_1.handle(),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    if (this->framegenScale < 1.0F) {
+        // SCALED MODE: swapchain → scaledInput (downsample) → staging
+        auto& scaledInput = this->frameIdx % 2 == 0 ? this->scaledInput_0 : this->scaledInput_1;
+
+        Utils::blitImage(pass.preCopyBuf.handle(),
+            this->swapchainImages.at(presentIdx), this->extent, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            scaledInput.handle(), this->scaledExtent,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_FILTER_LINEAR);
+
+        // Transition swapchain image back to PRESENT_SRC_KHR for deferred present
+        const VkImageMemoryBarrier presentBarrier{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .image = this->swapchainImages.at(presentIdx),
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1
+            }
+        };
+        Layer::ovkCmdPipelineBarrier(pass.preCopyBuf.handle(),
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+            0, nullptr, 0, nullptr, 1, &presentBarrier);
+
+        currentStaging.copyFromImage(pass.preCopyBuf.handle(),
+            scaledInput.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    } else {
+        // FULL-RES MODE: swapchain → frame_0/frame_1 → staging
+        Utils::copyImage(pass.preCopyBuf.handle(),
+            this->swapchainImages.at(presentIdx),
+            this->frameIdx % 2 == 0 ? this->frame_0.handle() : this->frame_1.handle(),
+            this->extent.width, this->extent.height,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            true, false);
+
+        currentStaging.copyFromImage(pass.preCopyBuf.handle(),
+            this->frameIdx % 2 == 0 ? this->frame_0.handle() : this->frame_1.handle(),
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    }
 
     pass.preCopyBuf.end();
+
+    // Create fence for input copy completion
+    this->inputCopyFence = Mini::Fence(info.device);
 
     std::vector<VkSemaphore> gameRenderSemaphores2 = gameRenderSemaphores;
     if (this->frameIdx > 0)
         gameRenderSemaphores2.emplace_back(this->passInfos.at((this->frameIdx - 1) % 8)
             .preCopySemaphores.at(1).handle());
 
-    pass.preCopyBuf.submit(info.queue.second,
+    pass.preCopyBuf.submit(info.queue.second, this->inputCopyFence.handle(),
         gameRenderSemaphores2,
         { pass.preCopySemaphores.at(0).handle(),
           pass.preCopySemaphores.at(1).handle() });
 
-    // Wait for all GPU work to complete before CPU memcpy
-    // This is a synchronization point - not optimal but ensures correctness
-    Layer::ovkQueueWaitIdle(info.queue.second);
-    auto t1 = std::chrono::steady_clock::now();
-    totalWait1 += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    // ---- Frame 0: synchronous startup ----
+    if (!this->hasPreviousOutput) {
+        // Wait for input copy to finish
+        (void)this->inputCopyFence.wait(info.device);
 
-    // 2. Copy from layer staging to LSFG staging (CPU memcpy)
-    // Use streaming stores for better performance with GPU memory
-    void* lsfgInPtr = this->frameIdx % 2 == 0 ? this->lsfgInPtr0 : this->lsfgInPtr1;
-    if (lsfgInPtr && currentStaging.data()) {
-        const size_t size = currentStaging.size();
-        const auto* src = static_cast<const char*>(currentStaging.data());
-        auto* dst = static_cast<char*>(lsfgInPtr);
-        // Use regular memcpy - streaming stores don't help much for reads from GPU memory
-        std::memcpy(dst, src, size);
+        // memcpy staging → LSFG input
+        void* lsfgInPtr = this->frameIdx % 2 == 0 ? this->lsfgInPtr0 : this->lsfgInPtr1;
+        if (lsfgInPtr && currentStaging.data())
+            std::memcpy(lsfgInPtr, currentStaging.data(), currentStaging.size());
+
+        // Submit async LSFG generation (non-blocking)
+        LSFG_3_1::submitStagingFrame(*this->lsfgCtxId);
+
+        // Present the original frame
+        VkSemaphore preCopySem = pass.preCopySemaphores.at(0).handle();
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = pNext,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &preCopySem,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain,
+            .pImageIndices = &presentIdx,
+        };
+        auto res = Layer::ovkQueuePresentKHR(queue, &presentInfo);
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+            throw LSFG::vulkan_error(res, "Failed to present swapchain image");
+
+        this->hasPreviousOutput = true;
+        this->prevPresentIdx = presentIdx;
+        this->frameIdx++;
+        return res;
     }
-    auto t2 = std::chrono::steady_clock::now();
-    totalMemcpy1 += std::chrono::duration<double, std::milli>(t2 - t1).count();
 
-    // 3. Run frame generation on secondary GPU
-    // Note: presentContextStaging is synchronous
-    LSFG_3_1::presentContextStaging(*this->lsfgCtxId);
-    auto t3 = std::chrono::steady_clock::now();
-    totalLsfg += std::chrono::duration<double, std::milli>(t3 - t2).count();
+    // ---- Frame 1+: pipelined steady state ----
+    // Step 2: Wait for previous LSFG generation to complete
+    LSFG_3_1::waitStagingOutput(*this->lsfgCtxId);
 
-    // 4. Copy generated frames from LSFG staging to layer staging, then to output images
-    auto t4 = std::chrono::steady_clock::now();
+    // Step 3: memcpy LSFG output → layer outStaging buffers
     for (size_t i = 0; i < (conf.multiplier - 1) && i < this->lsfgOutPtrs.size(); i++) {
-        // CPU memcpy from LSFG staging to our staging
         if (this->lsfgOutPtrs.at(i) && this->outStagingN.at(i).data()) {
             std::memcpy(this->outStagingN.at(i).data(), this->lsfgOutPtrs.at(i),
                 this->outStagingN.at(i).size());
         }
     }
-    auto t5 = std::chrono::steady_clock::now();
-    totalMemcpy2 += std::chrono::duration<double, std::milli>(t5 - t4).count();
 
+    // Step 4: Present generated frames
     for (size_t i = 0; i < (conf.multiplier - 1) && i < this->lsfgOutPtrs.size(); i++) {
-        // Acquire next swapchain image
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
         auto res = Layer::ovkAcquireNextImageKHR(info.device, this->swapchain, UINT64_MAX,
@@ -407,24 +478,68 @@ VkResult LsContext::presentStagingMode(const Hooks::DeviceInfo& info, const void
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw LSFG::vulkan_error(res, "Failed to acquire next swapchain image");
 
-        // Copy staging → out_n → swapchain (need blit for format conversion)
         pass.postCopySemaphores.at(i) = Mini::Semaphore(info.device);
         pass.prevPostCopySemaphores.at(i) = Mini::Semaphore(info.device);
         pass.postCopyBufs.at(i) = Mini::CommandBuffer(info.device, this->cmdPool);
         pass.postCopyBufs.at(i).begin();
 
-        // Step 1: Copy staging buffer to out_n image (same 16-bit format)
-        // Use TRANSFER_SRC_OPTIMAL as final layout for the subsequent blit
-        this->outStagingN.at(i).copyToImage(pass.postCopyBufs.at(i).handle(),
-            this->out_n.at(i).handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        if (this->framegenScale < 1.0F) {
+            auto& scaledOutput = this->scaledOutputN.at(i);
 
-        // Step 2: Blit out_n to swapchain (format conversion 16-bit → 8-bit)
-        Utils::copyImage(pass.postCopyBufs.at(i).handle(),
-            this->out_n.at(i).handle(),
-            this->swapchainImages.at(imageIdx),
-            this->extent.width, this->extent.height,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-            false, true, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            this->outStagingN.at(i).copyToImage(pass.postCopyBufs.at(i).handle(),
+                scaledOutput.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+            if (this->framegenDebug) {
+                const VkImageMemoryBarrier clearBarrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .image = this->swapchainImages.at(imageIdx),
+                    .subresourceRange = {
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .levelCount = 1,
+                        .layerCount = 1
+                    }
+                };
+                Layer::ovkCmdPipelineBarrier(pass.postCopyBufs.at(i).handle(),
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                    0, nullptr, 0, nullptr, 1, &clearBarrier);
+
+                const VkClearColorValue magenta = { .float32 = {1.0f, 0.0f, 1.0f, 1.0f} };
+                const VkImageSubresourceRange range = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = 1
+                };
+                Layer::ovkCmdClearColorImage(pass.postCopyBufs.at(i).handle(),
+                    this->swapchainImages.at(imageIdx), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    &magenta, 1, &range);
+            }
+
+            VkFilter filter = this->framegenUpscale ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+            VkExtent2D dstExtent = this->extent;
+            if (this->framegenDebug) {
+                dstExtent.width = this->extent.width > 40 ? this->extent.width - 40 : this->extent.width;
+                dstExtent.height = this->extent.height > 40 ? this->extent.height - 40 : this->extent.height;
+            }
+            Utils::blitImage(pass.postCopyBufs.at(i).handle(),
+                scaledOutput.handle(), this->scaledExtent, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                this->swapchainImages.at(imageIdx), dstExtent,
+                this->framegenDebug ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                filter);
+        } else {
+            this->outStagingN.at(i).copyToImage(pass.postCopyBufs.at(i).handle(),
+                this->out_n.at(i).handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+            Utils::copyImage(pass.postCopyBufs.at(i).handle(),
+                this->out_n.at(i).handle(),
+                this->swapchainImages.at(imageIdx),
+                this->extent.width, this->extent.height,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                false, true, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        }
 
         pass.postCopyBufs.at(i).end();
         pass.postCopyBufs.at(i).submit(info.queue.second,
@@ -432,7 +547,6 @@ VkResult LsContext::presentStagingMode(const Hooks::DeviceInfo& info, const void
             { pass.postCopySemaphores.at(i).handle(),
               pass.prevPostCopySemaphores.at(i).handle() });
 
-        // Present swapchain image
         std::vector<VkSemaphore> waitSemaphores{ pass.postCopySemaphores.at(i).handle() };
         if (i != 0) waitSemaphores.emplace_back(pass.prevPostCopySemaphores.at(i - 1).handle());
 
@@ -450,24 +564,35 @@ VkResult LsContext::presentStagingMode(const Hooks::DeviceInfo& info, const void
             throw LSFG::vulkan_error(res, "Failed to present swapchain image");
     }
 
-    // Present the original frame
+    // Step 5: Present the previous frame's original
     VkSemaphore lastPrevPostCopySemaphore =
         pass.prevPostCopySemaphores.at(conf.multiplier - 1 - 1).handle();
-    const VkPresentInfoKHR presentInfo{
+    uint32_t prevIdx = this->prevPresentIdx;
+    const VkPresentInfoKHR origPresentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &lastPrevPostCopySemaphore,
         .swapchainCount = 1,
         .pSwapchains = &this->swapchain,
-        .pImageIndices = &presentIdx,
+        .pImageIndices = &prevIdx,
     };
-    auto res = Layer::ovkQueuePresentKHR(queue, &presentInfo);
+    auto res = Layer::ovkQueuePresentKHR(queue, &origPresentInfo);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-        throw LSFG::vulkan_error(res, "Failed to present swapchain image");
+        throw LSFG::vulkan_error(res, "Failed to present original swapchain image");
 
-    auto t6 = std::chrono::steady_clock::now();
-    totalPresent += std::chrono::duration<double, std::milli>(t6 - t5).count();
+    // Step 6: Wait for input copy fence (likely already done since step 2 blocked)
+    (void)this->inputCopyFence.wait(info.device);
 
+    // Step 7: memcpy inStaging → LSFG input
+    void* lsfgInPtr = this->frameIdx % 2 == 0 ? this->lsfgInPtr0 : this->lsfgInPtr1;
+    if (lsfgInPtr && currentStaging.data())
+        std::memcpy(lsfgInPtr, currentStaging.data(), currentStaging.size());
+
+    // Step 8: Submit async LSFG generation (non-blocking)
+    LSFG_3_1::submitStagingFrame(*this->lsfgCtxId);
+
+    // Step 9: Store state for next frame
+    this->prevPresentIdx = presentIdx;
     this->frameIdx++;
     return res;
 }

@@ -107,4 +107,28 @@ namespace LSFG_3_1 {
     __attribute__((visibility("default")))
     void presentContextStaging(int32_t id);
 
+    ///
+    /// Submit frame generation asynchronously (staging mode).
+    /// Before calling, copy source data to inPtr0/inPtr1 staging buffers.
+    /// Returns immediately - GPU work is queued but not waited on.
+    /// Call waitStagingOutput() to block until output is ready.
+    ///
+    /// @param id Unique identifier of the context.
+    ///
+    /// @throws LSFG::vulkan_error if submission fails.
+    ///
+    __attribute__((visibility("default")))
+    void submitStagingFrame(int32_t id);
+
+    ///
+    /// Wait for the most recent submitStagingFrame to complete.
+    /// After returning, output staging buffers contain generated frames.
+    ///
+    /// @param id Unique identifier of the context.
+    ///
+    /// @throws LSFG::vulkan_error if the wait fails.
+    ///
+    __attribute__((visibility("default")))
+    void waitStagingOutput(int32_t id);
+
 }

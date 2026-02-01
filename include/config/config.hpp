@@ -30,6 +30,12 @@ namespace Config {
         std::optional<std::string> gpu;
         /// Secondary GPU for frame generation (PCI bus:device.function)
         std::optional<std::string> gpu_secondary;
+        /// Scale factor for framegen in dual-GPU mode (0.25 to 1.0)
+        float framegen_scale{1.0F};
+        /// Whether to upscale framegen output back to full resolution (default true)
+        bool framegen_upscale{true};
+        /// Debug mode: add colored border to generated frames to make them visible
+        bool framegen_debug{false};
 
         /// Experimental flag for overriding the synchronization method.
         VkPresentModeKHR e_present;

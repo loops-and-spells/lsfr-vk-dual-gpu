@@ -72,6 +72,23 @@ namespace LSFG_3_1 {
         ///
         void presentStaging(Vulkan& vk);
 
+        ///
+        /// Submit frame generation asynchronously (staging mode).
+        /// Before calling, write source frames to staging pointers.
+        /// GPU work is chained via semaphores - no CPU waits inside.
+        ///
+        /// @throws LSFG::vulkan_error if submission fails.
+        ///
+        void submitStagingFrame(Vulkan& vk);
+
+        ///
+        /// Wait for the most recent submitStagingFrame to complete.
+        /// After returning, output staging buffers contain generated frames.
+        ///
+        /// @throws LSFG::vulkan_error if the wait fails.
+        ///
+        void waitStagingFrame(Vulkan& vk);
+
         /// Get staging buffer pointers (only valid in staging mode)
         void getStagingPointers(void** in0, void** in1, std::vector<void*>& outPtrs) const;
 
@@ -105,6 +122,10 @@ namespace LSFG_3_1 {
             Core::CommandBuffer stagingInCmd;
             Core::CommandBuffer stagingOutCmd;
             Core::Fence stagingFence;
+
+            // Async staging mode semaphores
+            Core::Semaphore inputReadySem; // signaled when input staging copy is done
+            Core::Semaphore genDoneSem; // signaled when last generation pass is done
 
             bool shouldWait{false};
         };

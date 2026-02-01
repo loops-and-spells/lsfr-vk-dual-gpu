@@ -128,3 +128,25 @@ void LSFG_3_1::presentContextStaging(int32_t id) {
 
     it->second.presentStaging(*device);
 }
+
+void LSFG_3_1::submitStagingFrame(int32_t id) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.submitStagingFrame(*device);
+}
+
+void LSFG_3_1::waitStagingOutput(int32_t id) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.waitStagingFrame(*device);
+}

@@ -280,3 +280,120 @@ void Context::presentStaging(Vulkan& vk) {
 
     this->frameIdx++;
 }
+
+void Context::submitStagingFrame(Vulkan& vk) {
+    if (!stagingMode) {
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "submitStagingFrame called on non-staging context");
+    }
+
+    auto& renderData = this->data.at(this->frameIdx % 8);
+
+    // Wait for previous frame in this slot to complete
+    if (renderData.shouldWait) {
+        if (renderData.stagingFence.handle() != VK_NULL_HANDLE) {
+            if (!renderData.stagingFence.wait(vk.device, UINT64_MAX))
+                throw LSFG::vulkan_error(VK_TIMEOUT, "Staging fence wait timed out (async reuse)");
+            renderData.stagingFence.reset(vk.device);
+        }
+    }
+    renderData.shouldWait = true;
+
+    // Create semaphores for this frame's GPU pipeline
+    renderData.inputReadySem = Core::Semaphore(vk.device);
+    renderData.genDoneSem = Core::Semaphore(vk.device);
+    for (size_t i = 0; i < vk.generationCount; i++)
+        renderData.internalSemaphores.at(i) = Core::Semaphore(vk.device);
+
+    // 1. Copy staging buffer to input image, signal inputReadySem
+    renderData.stagingInCmd = Core::CommandBuffer(vk.device, vk.commandPool);
+    renderData.stagingInCmd.begin();
+
+    if (this->frameIdx % 2 == 0) {
+        inStaging_0.copyToImage(renderData.stagingInCmd.handle(),
+            inImg_0.handle(), inImg_0.getLayout());
+        inImg_0.setLayout(VK_IMAGE_LAYOUT_GENERAL);
+    } else {
+        inStaging_1.copyToImage(renderData.stagingInCmd.handle(),
+            inImg_1.handle(), inImg_1.getLayout());
+        inImg_1.setLayout(VK_IMAGE_LAYOUT_GENERAL);
+    }
+
+    renderData.stagingInCmd.end();
+    renderData.stagingInCmd.submit(vk.device.getComputeQueue(), std::nullopt,
+        {}, std::nullopt,
+        { renderData.inputReadySem }, std::nullopt);
+
+    // 2. Run first generation step (mipmaps, alpha, beta), waiting on inputReadySem
+    renderData.cmdBuffer1 = Core::CommandBuffer(vk.device, vk.commandPool);
+    renderData.cmdBuffer1.begin();
+
+    this->mipmaps.Dispatch(renderData.cmdBuffer1, this->frameIdx);
+    for (size_t i = 0; i < 7; i++)
+        this->alpha.at(6 - i).Dispatch(renderData.cmdBuffer1, this->frameIdx);
+    this->beta.Dispatch(renderData.cmdBuffer1, this->frameIdx);
+
+    renderData.cmdBuffer1.end();
+    renderData.cmdBuffer1.submit(vk.device.getComputeQueue(), std::nullopt,
+        { renderData.inputReadySem }, std::nullopt,
+        renderData.internalSemaphores, std::nullopt);
+
+    // 3. Generate intermediary frames
+    for (size_t pass = 0; pass < vk.generationCount; pass++) {
+        auto& internalSemaphore = renderData.internalSemaphores.at(pass);
+
+        auto& buf2 = renderData.cmdBuffers2.at(pass);
+        buf2 = Core::CommandBuffer(vk.device, vk.commandPool);
+        buf2.begin();
+
+        for (size_t i = 0; i < 7; i++) {
+            this->gamma.at(i).Dispatch(buf2, this->frameIdx, pass);
+            if (i >= 4)
+                this->delta.at(i - 4).Dispatch(buf2, this->frameIdx, pass);
+        }
+        this->generate.Dispatch(buf2, this->frameIdx, pass);
+
+        buf2.end();
+
+        // Last pass signals genDoneSem
+        std::vector<Core::Semaphore> signals;
+        if (pass == vk.generationCount - 1)
+            signals.push_back(renderData.genDoneSem);
+
+        buf2.submit(vk.device.getComputeQueue(), std::nullopt,
+            { internalSemaphore }, std::nullopt,
+            signals, std::nullopt);
+    }
+
+    // 4. Copy output images to staging buffers, waiting on genDoneSem, fenced
+    renderData.stagingOutCmd = Core::CommandBuffer(vk.device, vk.commandPool);
+    renderData.stagingOutCmd.begin();
+
+    auto& outImages = this->generate.getOutImages();
+    for (size_t i = 0; i < vk.generationCount && i < outStagingN.size(); ++i) {
+        outStagingN.at(i).copyFromImage(renderData.stagingOutCmd.handle(),
+            outImages.at(i).handle(), outImages.at(i).getLayout());
+    }
+
+    renderData.stagingOutCmd.end();
+
+    renderData.stagingFence = Core::Fence(vk.device);
+    renderData.stagingOutCmd.submit(vk.device.getComputeQueue(), renderData.stagingFence,
+        { renderData.genDoneSem }, std::nullopt,
+        {}, std::nullopt);
+
+    this->frameIdx++;
+}
+
+void Context::waitStagingFrame(Vulkan& vk) {
+    if (!stagingMode) {
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "waitStagingFrame called on non-staging context");
+    }
+
+    // Wait for the most recently submitted frame's output staging fence
+    // The frameIdx was already incremented in submitStagingFrame, so previous is frameIdx-1
+    auto& renderData = this->data.at((this->frameIdx - 1) % 8);
+    if (renderData.stagingFence.handle() != VK_NULL_HANDLE) {
+        if (!renderData.stagingFence.wait(vk.device, UINT64_MAX))
+            throw LSFG::vulkan_error(VK_TIMEOUT, "Staging output fence wait timed out (async)");
+    }
+}
